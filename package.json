@@ -1,0 +1,14 @@
+{
+  "name": "monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n frontend,backend -c cyan,magenta \"npm:dev:frontend\" \"npm:dev:backend\"",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "cd backend && uv run uvicorn main:app --port 8000",
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}
