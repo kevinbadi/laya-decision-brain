@@ -8,6 +8,8 @@ import {
   createGame,
   makeLesson,
   moveCriteria,
+  moveCriteriaForModel,
+  obviousMove,
   resolveMove,
   step,
   toLayaState,
@@ -27,6 +29,14 @@ function sleep(ms: number) {
 
 const ARROW: Record<Dir, string> = { up: "▲", down: "▼", left: "◀", right: "▶" };
 
+const SPEEDS = [
+  { id: 1, label: "slow", human: 280, laya: 220 },
+  { id: 2, label: "easy", human: 180, laya: 120 },
+  { id: 3, label: "norm", human: 140, laya: 50 },
+  { id: 4, label: "fast", human: 80, laya: 10 },
+  { id: 5, label: "max", human: 40, laya: 0 },
+] as const;
+
 export default function SnakePage() {
   const [game, setGame] = useState<Game>(() => createGame());
   const [driver, setDriver] = useState<Driver>("laya");
@@ -42,8 +52,10 @@ export default function SnakePage() {
   const [games, setGames] = useState(0);
   const [eaten, setEaten] = useState(0);
   const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [speed, setSpeed] = useState(3);
 
   const careerRef = useRef({ best: 0, games: 0, lessons: [] as Lesson[] });
+  const speedRef = useRef(speed);
 
   const gameRef = useRef(game);
   const playRef = useRef(false);
@@ -61,6 +73,9 @@ export default function SnakePage() {
   useEffect(() => {
     coachRef.current = coach;
   }, [coach]);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
 
   useEffect(() => {
     api.health().catch(() => setOffline(true));
@@ -72,6 +87,8 @@ export default function SnakePage() {
       if (saved.games) setGames(saved.games);
       if (saved.eaten) setEaten(saved.eaten);
       if (saved.lessons?.length) setLessons(saved.lessons.slice(-12));
+      const storedSpeed = Number(localStorage.getItem("laya-snake-speed"));
+      if (SPEEDS.some((s) => s.id === storedSpeed)) setSpeed(storedSpeed);
     } catch {
       /* ignore bad cache */
     }
@@ -109,7 +126,7 @@ export default function SnakePage() {
     const career = careerRef.current;
     const caution = career.lessons.filter((l) => l.death === "body").length;
     const res = await api.evaluate(toLayaState(g, career), {
-      move: { ...MOVE_QUESTION, criteria: moveCriteria(g, coachRef.current, caution) },
+      move: { ...MOVE_QUESTION, criteria: moveCriteriaForModel(g, caution) },
     });
     setLastMs(Math.round(performance.now() - t0));
     const ans = res.answers.move;
@@ -127,17 +144,27 @@ export default function SnakePage() {
       try {
         setError(null);
         let dir: Dir;
+        const tick = SPEEDS.find((s) => s.id === speedRef.current) ?? SPEEDS[2];
         if (driverRef.current === "human") {
           dir = queued.current ?? g.dir;
           queued.current = null;
           setPlayed(dir);
-          await sleep(140);
+          await sleep(tick.human);
         } else {
-          dir = await askLaya(g);
+          const caution = careerRef.current.lessons.filter((l) => l.death === "body").length;
+          const instant = obviousMove(g, caution);
+          if (instant) {
+            dir = instant;
+            setPlayed(dir);
+            setOverride(null);
+            await sleep(tick.laya || 40);
+          } else {
+            dir = await askLaya(g);
+            if (tick.laya) await sleep(tick.laya);
+          }
         }
         if (!playRef.current || loopRef.current !== id) break;
         apply(step(g, dir), g.score);
-        if (driverRef.current === "laya") await sleep(50);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         playRef.current = false;
@@ -271,6 +298,28 @@ export default function SnakePage() {
                       { value: "human", label: "You" },
                     ]}
                   />
+                  <label className="flex items-center gap-2 pl-1 font-mono text-[11px] text-white/45">
+                    speed
+                    <input
+                      type="range"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={speed}
+                      aria-label="Snake speed"
+                      className="h-1 w-[72px] cursor-pointer accent-[#8dff78]"
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        setSpeed(next);
+                        try {
+                          localStorage.setItem("laya-snake-speed", String(next));
+                        } catch {
+                          /* private mode */
+                        }
+                      }}
+                    />
+                    <span className="w-8 text-lime">{SPEEDS[speed - 1].label}</span>
+                  </label>
                 </div>
               </div>
               <div className={`cabinet-screen ${game.dead ? "is-dead" : ""} ${game.won ? "is-won" : ""}`}>

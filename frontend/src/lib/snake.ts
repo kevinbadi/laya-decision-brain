@@ -236,60 +236,56 @@ export function makeLesson(game: Game, n: number): Lesson {
   return { n, score: game.score, death, length: game.snake.length, note };
 }
 
-function asciiWindow(game: Game, radius = 5) {
-  const h = game.snake[0];
-  const rows: string[] = [];
-  for (let y = h.y - radius; y <= h.y + radius; y++) {
-    let row = "";
-    for (let x = h.x - radius; x <= h.x + radius; x++) {
-      const p = { x, y };
-      if (!inBounds(game.size, p)) row += "#";
-      else if (eq(p, game.snake[0])) row += "H";
-      else if (occupied(game.snake, p)) row += "o";
-      else if (eq(p, game.food)) row += "*";
-      else row += ".";
-    }
-    rows.push(row);
-  }
-  return rows.join("\n");
-}
-
 export function toLayaState(game: Game, career?: { best: number; games: number; lessons: Lesson[] }) {
   const head = game.snake[0];
   const dx = game.food.x - head.x;
   const dy = game.food.y - head.y;
-  const lessons = career?.lessons ?? [];
-  const boxed = lessons.filter((l) => l.death === "body").length;
+  const boxed = (career?.lessons ?? []).some((l) => l.death === "body");
   return {
-    game: "snake",
-    field: `${game.size}x${game.size}`,
-    legend: "H=head o=body *=food .=empty #=off-board. Local view around the head.",
-    around_head: asciiWindow(game),
-    heading: game.dir,
-    score: game.score,
-    length: game.snake.length,
-    apple: `${dy === 0 ? "" : dy < 0 ? `${-dy} up` : `${dy} down`}${dx !== 0 && dy !== 0 ? " and " : ""}${
+    apple: `${dy === 0 ? "" : dy < 0 ? `${-dy} up` : `${dy} down`}${dx !== 0 && dy !== 0 ? " " : ""}${
       dx === 0 ? "" : dx < 0 ? `${-dx} left` : `${dx} right`
-    }`.trim() || "under the head",
-    hunt: [dy < 0 && "up", dy > 0 && "down", dx < 0 && "left", dx > 0 && "right"].filter(Boolean).join(" then "),
-    adjacent: Object.fromEntries(DIRS.map((d) => [d, peek(game, d)])),
-    career: {
-      games: career?.games ?? 0,
-      best: career?.best ?? 0,
-      body_deaths: boxed,
-      lessons: lessons.slice(-6).map((l) => l.note),
-      rule: boxed
-        ? "Avoid TRAP. Prefer the HUNT with the most open cells. Do not close a pocket."
-        : "Hunt the apple. Stay off walls unless the apple is there.",
-    },
+    }`.trim() || "here",
+    heading: game.dir,
+    hunt: [dy < 0 && "up", dy > 0 && "down", dx < 0 && "left", dx > 0 && "right"].filter(Boolean).join(" "),
+    adj: Object.fromEntries(DIRS.map((d) => [d, peek(game, d)])),
+    rule: boxed ? "avoid TRAP pockets" : "hunt apple",
   };
+}
+
+export function moveCriteriaForModel(game: Game, caution = 0): Record<string, string> {
+  const need = spaceNeeded(game, caution);
+  return Object.fromEntries(
+    DIRS.map((dir) => {
+      const { cell, reverse, closer, trap } = describeMove(game, dir, need);
+      if (reverse) return [dir, "ILLEGAL"];
+      if (cell === "wall") return [dir, "DEATH"];
+      if (cell === "body") return [dir, "DEATH"];
+      if (trap) return [dir, "TRAP"];
+      if (cell === "food") return [dir, "EAT"];
+      if (closer) return [dir, "HUNT"];
+      return [dir, "DRIFT"];
+    }),
+  );
 }
 
 export const MOVE_QUESTION = {
   type: "choice" as const,
-  instructions:
-    "You are playing Snake. The glowing * is the apple. Always pick EAT if it is safe. Otherwise pick a HUNT that is not a TRAP — the one with the most open cells. Never pick DEATH, ILLEGAL, TRAP, or DRIFT when a safe HUNT or EAT exists. Read career lessons so you do not repeat the death that already happened.",
+  instructions: "Snake. Pick EAT, else HUNT, never DEATH ILLEGAL TRAP.",
 };
+
+/** If the seatbelt already has one legal play, skip Laya. */
+export function obviousMove(game: Game, caution = 0): Dir | null {
+  const safe = safeMoves(game);
+  if (safe.length === 0) return null;
+  if (safe.length === 1) return safe[0];
+  const need = spaceNeeded(game, caution);
+  const scored = safe.map((d) => ({ d, ...describeMove(game, d, need) }));
+  const eat = scored.filter((s) => s.cell === "food");
+  if (eat.length === 1) return eat[0].d;
+  const hunt = scored.filter((s) => s.closer && !s.trap);
+  if (hunt.length === 1) return hunt[0].d;
+  return null;
+}
 
 export function isSafe(game: Game, dir: Dir) {
   if (isReverse(game, dir)) return false;
